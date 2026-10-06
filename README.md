@@ -1,112 +1,75 @@
-# TikTok Music Bot
+# Interview Bank
 
-Automated pipeline: **Suno** (song + lyrics) → **FFmpeg** (vertical MP4 with waveform overlay) → **TikTok Content Posting API** (upload + publish). Runs on demand or on a Windows Task Scheduler cron.
+A study app for interview preparation: a shared public bank of questions and answers, private practice with spaced repetition, and import of existing notes. Work in progress.
 
-## Prerequisites
+## Status
 
-- **Node.js 20+** and **pnpm** (`npm i -g pnpm`).
-- A **Suno API** provider:
-  - `sunoapi-org` (hosted) — set `SUNO_PROVIDER=sunoapi-org`.
-  - `gcui-art/suno-api` (self-hosted) — set `SUNO_PROVIDER=gcui-art`.
-- A **TikTok Developer app** with the `video.upload` and `video.publish` scopes.
-  - `video.publish` requires app audit; develop against **sandbox** first.
-- A default **cover image** at `config/default-cover.jpg` (1080×1920 JPG recommended).
+Built so far:
 
-## Setup
+- Next.js 16 app shell (App Router, TypeScript, Tailwind CSS 4).
+- PostgreSQL 17 through Prisma 7, a validated environment and a `/api/health` endpoint that checks the database connection.
+- A local import reader at `/imports`. It reads HTML, Markdown, plain text and Word (.docx) files in the browser, finds the questions and lists them for review. Nothing is saved yet.
+
+Planned, in order: Google and GitHub sign-in, question management and publishing, search, saving imported questions, practice with spaced repetition, progress, and moderation.
+
+## Requirements
+
+- Node.js 24
+- pnpm 10
+- PostgreSQL 17 (`pnpm db:dev` starts a local one, no Docker needed)
+
+## Getting started
 
 ```powershell
 pnpm install
-Copy-Item .env.example .env
-# then fill in .env
+Copy-Item .env.example .env.local
+pnpm db:dev    # keep this running in its own terminal
+pnpm dev       # http://localhost:3000
 ```
 
-Required `.env` values:
+`pnpm db:dev` keeps its data in `.data/postgres` and listens on port 54329, which is what `.env.example` expects. To use another server, set `DATABASE_URL` (and `DIRECT_URL`, the non-pooled URL used by migrations) in `.env.local`.
 
-| Key                     | Why |
-| ----------------------- | --- |
-| `SUNO_API_BASE`         | Base URL of your Suno provider |
-| `SUNO_API_KEY`          | Bearer token for Suno |
-| `SUNO_PROVIDER`         | `sunoapi-org` or `gcui-art` |
-| `TIKTOK_CLIENT_KEY`     | From TikTok Developer portal |
-| `TIKTOK_CLIENT_SECRET`  | From TikTok Developer portal |
-| `TIKTOK_REDIRECT_URI`   | Must match portal exactly, e.g. `http://localhost:53682/callback` |
-| `TOKENS_PASSPHRASE`     | Local-only secret used to encrypt stored TikTok tokens |
+## Commands
 
-## One-time TikTok login
+| Command | What it does |
+| --- | --- |
+| `pnpm dev` | Development server with Turbopack. |
+| `pnpm build`, `pnpm start` | Production build and server. |
+| `pnpm typecheck` | Generates route types and runs `tsc --noEmit`. |
+| `pnpm lint` | ESLint. |
+| `pnpm test` | Unit tests (Vitest). |
+| `pnpm test:integration` | Tests that need a database. They start a disposable PostgreSQL 17 automatically. |
+| `pnpm test:e2e` | Browser tests against a fresh production build. Run `pnpm exec playwright install` once first. |
 
-```powershell
-pnpm auth:tiktok
+Integration tests can use an existing server instead: set `TEST_DATABASE_URL` to a database whose name contains `test`. Those tests empty tables, so any other name is refused.
+
+The browser tests build the app, serve it on port 3100 and run in Chromium, Firefox, WebKit and two mobile profiles. They check that the import worker loads in the production bundle, that cancelling stops it, that the page stays responsive while a large file is read, and that the chosen file is never sent anywhere.
+
+## Importing questions
+
+Open `/imports`, choose a file and review the questions found. Supported files:
+
+| Format | Notes |
+| --- | --- |
+| HTML (`.html`, `.htm`) | Scripts, frames, forms and media are dropped. |
+| Markdown (`.md`, `.markdown`) | GitHub-flavoured tables are supported. |
+| Plain text (`.txt`) | UTF-8 only. |
+| Word (`.docx`) | Legacy `.doc` and PDF files are not supported; save as `.docx` first. |
+
+In every format, images, raw HTML and links that are not http, https or mailto are removed, and the review screen says how many. Imported text is shown as plain text, never as HTML.
+
+Questions are detected from level 1, 2 or 3 headings (the heading is the question, what follows is the answer), from `Q:` and `A:` labels, or from a two-column table headed Question and Answer. The structure is detected automatically and can be chosen by hand.
+
+The file is read in a Web Worker in your browser and is never uploaded, so large files do not freeze the page and closing the tab cancels the work. Limits: 10 MiB per file and 1,000 questions per file; about 2 million characters of Markdown or plain text; 100,000 tags of HTML; for Word files, 3 MiB of document text (XML), 20 MiB once unpacked and 2,048 internal parts. Processing stops after 15 seconds, so a very large or densely formatted file may need to be split. Limits on titles, questions and answers (160 characters, 20 KiB, 60 KiB) are listed in [src/features/imports/limits.ts](src/features/imports/limits.ts).
+
+## Layout
+
+```text
+src/app/                 Routes: pages, /imports, /api/health
+src/components/          App shell and navigation
+src/features/imports/    File parsing: worker, format readers, question detection, review screen
+src/lib/                 Environment validation and the Prisma client
+prisma/                  Schema (no models yet)
+scripts/                 Local database
+tests/                   e2e specs, fixtures for imports, test helpers
 ```
-
-Opens the browser, completes OAuth, and writes `config/tiktok-tokens.json` (AES-256-GCM encrypted).
-
-## Run a post
-
-```powershell
-# Free-form prompt
-pnpm post --prompt "lofi rainy tokyo, mellow piano"
-
-# From a rotating prompt pool (config/prompts.yaml)
-pnpm post --prompt-pool daily
-
-# Dry run (skips the TikTok upload but produces out.mp4)
-pnpm post --prompt "synthwave sunset" --dry-run
-```
-
-Each run creates `runs/<jobId>/` containing `job.json`, `song.mp3`, `cover.jpg`, `lyrics.txt`, and `out.mp4`.
-
-## Resume a failed job
-
-```powershell
-pnpm resume 20260422T090000-abc123
-```
-
-Stages with complete artifacts are skipped automatically. If an upload was initiated, the stored `publish_id` is reused for status polling.
-
-## Schedule daily posts
-
-```powershell
-# Run as admin for Task Scheduler registration
-.\scripts\schedule.ps1 -Time "09:00" -PromptPool daily
-
-# Trigger manually
-schtasks /Run /TN TikTokMusicBot
-
-# Remove
-schtasks /Delete /TN TikTokMusicBot /F
-```
-
-## Tests
-
-```powershell
-pnpm test
-```
-
-## Repo layout
-
-```
-src/
-  cli/            commander entry point
-  pipeline/       stage runner, retry, rate-limit guard, job types
-  storage/        atomic per-job JSON persistence under runs/
-  suno/           SunoClient, download, stages
-  video/          fluent-ffmpeg renderer, stage
-  tiktok/         OAuth, encrypted token store, client, stage
-  logging/        pino logger with secret redaction
-  config/         zod-validated env loader
-scripts/
-  render-sample.ts  quick FFmpeg iteration without API calls
-  schedule.ps1      Windows Task Scheduler registration
-config/
-  prompts.yaml      rotating prompt pool
-  video.json        render defaults
-  default-cover.jpg (you provide)
-test/               vitest unit tests
-```
-
-## Notes & warnings
-
-- **TikTok spam policy**: repetitive still-image music posts get flagged. Start at 1 post/day with rotating prompts and covers.
-- **Suno commercial rights**: the free tier usually forbids monetization. Verify your plan before monetizing.
-- **Secrets**: `.env` and `config/tiktok-tokens.json` are gitignored. Never commit either.
-"# Interview-Bank" 

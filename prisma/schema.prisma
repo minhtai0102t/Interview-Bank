@@ -1,0 +1,207 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Authentication (Better Auth)
+//
+// Generated from scripts/auth-schema.config.ts with
+//   pnpm dlx auth@1.7.7 generate --config scripts/auth-schema.config.ts --adapter prisma --dialect postgresql
+// then extended with the relations to application data, timestamptz columns and one unique constraint.
+// Review the CLI output against this file after upgrading Better Auth.
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String     @id
+  name          String
+  email         String
+  emailVerified Boolean    @default(false)
+  image         String?
+  createdAt     DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime   @updatedAt @db.Timestamptz(3)
+  /// USER or ADMIN (enforced by a CHECK constraint). Only trusted maintenance code changes it.
+  role          String     @default("USER")
+  sessions      Session[]
+  accounts      Account[]
+  profile       Profile?
+  questions     Question[]
+  bookmarks     Bookmark[]
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime @db.Timestamptz(3)
+  token     String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime? @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @db.Timestamptz(3)
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+
+  /// One provider identity belongs to exactly one user, even when two sign-ins race.
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model RateLimit {
+  id          String @id
+  key         String
+  count       Int
+  lastRequest BigInt
+
+  @@unique([key])
+  @@map("rateLimit")
+}
+
+// ---------------------------------------------------------------------------
+// Application data
+//
+// Content rules that Prisma cannot express (length limits, role values, immutable revisions) are enforced by the
+// hand-written SQL in the "domain_constraints" migration.
+// ---------------------------------------------------------------------------
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum ModerationState {
+  ACTIVE
+  REMOVED
+}
+
+/// Optional per-user settings. A row exists once the user has chosen something.
+model Profile {
+  userId      String   @id
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Name shown next to published questions. Never the name or email from the sign-in provider.
+  publicAlias String?
+  /// IANA time zone used to decide what "today" means for reviews.
+  timeZone    String   @default("UTC")
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@map("profile")
+}
+
+model Topic {
+  id        String             @id @default(uuid(7)) @db.Uuid
+  /// Stable lowercase identifier used in URLs and seeds.
+  slug      String             @unique
+  label     String
+  sortOrder Int
+  questions Question[]
+  revisions QuestionRevision[]
+
+  @@map("topic")
+}
+
+/// The author's working copy plus the pointer to the revision visible in the public library.
+model Question {
+  id                         String             @id @default(uuid(7)) @db.Uuid
+  /// Null after the author's account is deleted; their published content stays as an anonymous contribution.
+  authorId                   String?
+  author                     User?              @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  title                      String
+  promptMarkdown             String
+  answerMarkdown             String
+  topicId                    String             @db.Uuid
+  topic                      Topic              @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  difficulty                 Difficulty
+  tags                       String[]
+  /// Increases with every accepted content change; revisions are snapshots of one version.
+  draftVersion               Int                @default(1)
+  /// The snapshot shown publicly. Null while the question has never been published or is unpublished.
+  /// The composite key guarantees that the snapshot belongs to this very question.
+  currentPublishedRevisionId String?            @db.Uuid
+  currentPublishedRevision   QuestionRevision?  @relation("PublishedRevision", fields: [id, currentPublishedRevisionId], references: [questionId, id], onDelete: NoAction)
+  revisions                  QuestionRevision[] @relation("RevisionOwner")
+  archivedAt                 DateTime?          @db.Timestamptz(3)
+  moderationState            ModerationState    @default(ACTIVE)
+  createdAt                  DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt                  DateTime           @updatedAt @db.Timestamptz(3)
+  bookmarks                  Bookmark[]
+
+  @@index([authorId, archivedAt, updatedAt, id])
+  @@index([currentPublishedRevisionId])
+  @@map("question")
+}
+
+/// An immutable snapshot of a question at one draft version. Only publishedAt may change after creation.
+model QuestionRevision {
+  id             String     @id @default(uuid(7)) @db.Uuid
+  questionId     String     @db.Uuid
+  question       Question   @relation("RevisionOwner", fields: [questionId], references: [id], onDelete: Restrict)
+  draftVersion   Int
+  title          String
+  promptMarkdown String
+  answerMarkdown String
+  topicId        String     @db.Uuid
+  topic          Topic      @relation(fields: [topicId], references: [id], onDelete: Restrict)
+  difficulty     Difficulty
+  tags           String[]
+  createdAt      DateTime   @default(now()) @db.Timestamptz(3)
+  /// When this snapshot became the public version. Publication metadata, not part of the snapshot.
+  publishedAt    DateTime?  @db.Timestamptz(3)
+  publishedFor   Question[] @relation("PublishedRevision")
+
+  @@unique([questionId, draftVersion])
+  @@unique([questionId, id])
+  @@index([topicId, difficulty, id])
+  @@map("question_revision")
+}
+
+model Bookmark {
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId String   @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([userId, questionId])
+  @@map("bookmark")
+}

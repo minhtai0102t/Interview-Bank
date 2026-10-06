@@ -1,0 +1,8 @@
+Q: What does TCP guarantee?
+A: Ordered, reliable delivery of a byte stream, using acknowledgements and retransmission.
+
+Q: Why is the TLS handshake needed?
+A: It authenticates the server and agrees on keys, so later traffic is encrypted. Naïve answers skip certificate validation, which is the important part.
+
+Q: Qu’est-ce que le DNS ?
+A: Le système de noms de domaine traduit des noms lisibles (例: example.test) en adresses IP.

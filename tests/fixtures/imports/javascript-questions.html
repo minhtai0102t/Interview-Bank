@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>JavaScript interview questions</title>
+    <link rel="stylesheet" href="https://styles.example.test/theme.css" />
+    <style>
+      body {
+        background: url("https://styles.example.test/tracker.png");
+      }
+    </style>
+    <script>
+      window.__importFixtureExecuted = true;
+    </script>
+  </head>
+  <body onload="window.__importFixtureExecuted = true">
+    <h1>JavaScript interview questions</h1>
+
+    <h2>What is a closure?</h2>
+    <p>A closure is a function that keeps access to the variables of the scope where it was created.</p>
+    <pre><code>function counter() {
+  let count = 0;
+  return () =&gt; ++count;
+}</code></pre>
+
+    <h2>What does <code>Promise.all</code> do?</h2>
+    <p>It resolves once every promise has resolved and rejects as soon as one of them rejects.</p>
+    <img src="https://images.example.test/pixel.png" alt="tracking pixel" />
+    <iframe src="https://frames.example.test/embed" title="embedded frame"></iframe>
+
+    <h2>How is work ordered by the event loop?</h2>
+    <p>
+      Synchronous code runs first, then microtasks, then the next task.
+      <a href="javascript:window.__importFixtureExecuted = true">Unsafe link</a>
+    </p>
+  </body>
+</html>

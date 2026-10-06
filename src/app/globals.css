@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+/* Quiet, light study workspace. Emerald is the only brand colour; coral and amber carry meaning. */
+@theme {
+  --color-canvas: #f6f7f8;
+  --color-surface: #ffffff;
+  --color-line: #d8dde3;
+  --color-ink: #1f2933;
+  --color-muted: #52606d;
+  --color-primary: #047857;
+  --color-primary-strong: #065f46;
+  --color-danger: #c53d33;
+  --color-danger-soft: #fdeceb;
+  --color-due-soft: #fef3c7;
+  --color-due-ink: #92400e;
+
+  --radius-control: 6px;
+  --radius-panel: 8px;
+}
+
+@theme inline {
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "Cascadia Code", monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    letter-spacing: 0;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
