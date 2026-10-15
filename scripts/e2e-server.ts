@@ -9,6 +9,7 @@ import { signInAs } from "../tests/helpers/auth";
 import { E2E_AUTH_ENV, E2E_PORT, E2E_SESSIONS_PORT, E2E_SIGNED_IN_STATE } from "../tests/setup/e2e-env";
 import { applyMigrations } from "./apply-migrations";
 import { startEmbeddedPostgres } from "./embedded-db";
+import { seedStarterBank } from "./seed";
 
 /**
  * The application under test for Playwright: a throwaway PostgreSQL 17 server, a production build and a
@@ -34,8 +35,12 @@ function exitCodeOf(child: ChildProcess): Promise<number> {
 }
 
 /** What a browser holds after signing in, in Playwright's storage state format. */
-async function storageStateFor(name: string) {
-  const { headers } = await signInAs({ name });
+async function storageStateFor(name: string, role: "USER" | "ADMIN" = "USER") {
+  const session = await signInAs({ name });
+  if (role === "ADMIN") {
+    await getPrisma().user.update({ where: { id: session.user.id }, data: { role: "ADMIN" } });
+  }
+  const { headers } = session;
   const cookies = (headers.get("cookie") ?? "")
     .split("; ")
     .filter(Boolean)
@@ -79,9 +84,10 @@ async function answerSessionRequest(request: IncomingMessage, response: ServerRe
   }
 
   try {
-    const { name } = (await readJson(request)) as { name?: unknown };
+    const { name, role } = (await readJson(request)) as { name?: unknown; role?: unknown };
     const person = typeof name === "string" && name.trim() ? name.trim().slice(0, 80) : "E2E Person";
-    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(await storageStateFor(person)));
+    const normalizedRole = role === "ADMIN" ? "ADMIN" : "USER";
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(await storageStateFor(person, normalizedRole)));
   } catch (error) {
     console.error("Could not create a signed-in person:", error);
     response.writeHead(500).end();
@@ -121,6 +127,7 @@ async function main(): Promise<void> {
     // This process signs people in with the same secret and database the server below will use.
     Object.assign(process.env, E2E_AUTH_ENV, database);
     await applyMigrations(cluster.url);
+    await seedStarterBank();
 
     await new Promise<void>((resolve, reject) => {
       sessions.once("error", reject);

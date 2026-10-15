@@ -15,16 +15,18 @@ export function AppShell({ children }: { children: ReactNode }) {
         Skip to main content
       </a>
       <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex min-h-14 w-full max-w-6xl flex-wrap items-center gap-x-6 gap-y-1 px-4">
-          <Link href="/" className="py-3 text-base font-semibold">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
+          <Link href="/" className="min-h-11 py-2 text-base font-semibold">
             Interview Bank
           </Link>
-          <MainNav />
-          <div className="ml-auto">
+          <div className="ml-auto sm:order-3">
             {/* Looking up the session must not hold back the rest of the page. */}
             <Suspense fallback={<span aria-hidden className="block h-11 w-24" />}>
               <AccountMenu />
             </Suspense>
+          </div>
+          <div className="basis-full sm:order-2 sm:basis-auto sm:flex-1">
+            <MainNav />
           </div>
         </div>
       </header>

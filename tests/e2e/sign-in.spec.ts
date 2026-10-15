@@ -33,10 +33,12 @@ test.describe("someone who is not signed in", () => {
   test("can reach the sign-in page from the header", async ({ page }) => {
     await page.goto("/");
 
-    await page.getByRole("link", { name: "Sign in" }).click();
+    const banner = page.getByRole("banner");
+
+    await banner.getByRole("link", { name: "Sign in", exact: true }).click();
 
     await expect(page).toHaveURL(`${E2E_ORIGIN}/sign-in`);
-    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+    await expect(banner.getByRole("button", { name: "Sign out", exact: true })).toHaveCount(0);
   });
 
   for (const { label, id, host, clientId } of providers) {
@@ -73,9 +75,11 @@ test.describe("someone who is signed in", () => {
   test("sees their name and a way to sign out", async ({ page }) => {
     await page.goto("/");
 
-    await expect(page.getByText("E2E Reviewer")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Sign in" })).toHaveCount(0);
+    const banner = page.getByRole("banner");
+
+    await expect(banner.getByText("E2E Reviewer", { exact: true })).toBeVisible();
+    await expect(banner.getByRole("button", { name: "Sign out", exact: true })).toBeVisible();
+    await expect(banner.getByRole("link", { name: "Sign in", exact: true })).toHaveCount(0);
   });
 
   test("can use the import tool", async ({ page }) => {
@@ -111,13 +115,16 @@ const signedInOnTheirOwn = test.extend({
 signedInOnTheirOwn.describe("signing out", () => {
   signedInOnTheirOwn("ends the session and shows the site as a visitor sees it", async ({ page }) => {
     await page.goto("/imports");
-    await expect(page.getByText("Sign Out Tester")).toBeVisible();
 
-    await page.getByRole("button", { name: "Sign out" }).click();
+    const banner = page.getByRole("banner");
+
+    await expect(banner.getByText("Sign Out Tester", { exact: true })).toBeVisible();
+
+    await banner.getByRole("button", { name: "Sign out", exact: true }).click();
 
     await expect(page).toHaveURL(`${E2E_ORIGIN}/`);
-    await expect(page.getByRole("link", { name: "Sign in" })).toBeVisible();
-    await expect(page.getByText("Sign Out Tester")).toHaveCount(0);
+    await expect(banner.getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
+    await expect(banner.getByText("Sign Out Tester", { exact: true })).toHaveCount(0);
 
     await page.goto("/imports");
     await expect(page).toHaveURL(`${E2E_ORIGIN}/sign-in?next=%2Fimports`);

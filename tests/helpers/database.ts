@@ -5,7 +5,7 @@ import { getPrisma } from "@/lib/prisma";
 
 /** Removes every row from the application tables. Integration tests run against a database named "test". */
 export async function resetDatabase(): Promise<void> {
-  await getPrisma().$executeRaw`TRUNCATE TABLE "user", "topic", "verification", "rateLimit" RESTART IDENTITY CASCADE`;
+  await getPrisma().$executeRaw`TRUNCATE TABLE "user", "topic", "verification", "rateLimit", "collection", "collection_item", "import_receipt", "review_card", "practice_session", "practice_item" RESTART IDENTITY CASCADE`;
 }
 
 export async function disconnectDatabase(): Promise<void> {

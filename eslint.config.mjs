@@ -11,6 +11,7 @@ export default defineConfig([
     },
   },
   globalIgnores([
+    ".superpowers/**",
     ".next/**",
     "out/**",
     "next-env.d.ts",

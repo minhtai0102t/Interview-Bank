@@ -31,6 +31,10 @@ model User {
   profile       Profile?
   questions     Question[]
   bookmarks     Bookmark[]
+  collections   Collection[]
+  importReceipts ImportReceipt[]
+  reviewCards   ReviewCard[]
+  practiceSessions PracticeSession[]
 
   @@unique([email])
   @@map("user")
@@ -114,6 +118,96 @@ enum ModerationState {
   REMOVED
 }
 
+enum PracticeMode {
+  REVIEW
+  MOCK
+}
+
+model Collection {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String           @default("")
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @db.Timestamptz(3)
+  items       CollectionItem[]
+
+  @@index([userId, updatedAt, id])
+  @@map("collection")
+}
+
+model CollectionItem {
+  collectionId String     @db.Uuid
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  questionId   String     @db.Uuid
+  question     Question   @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@id([collectionId, questionId])
+  @@index([questionId])
+  @@map("collection_item")
+}
+
+model ImportReceipt {
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  requestId   String
+  contentHash String
+  questionIds String[]
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([userId, requestId])
+  @@index([userId, createdAt])
+  @@map("import_receipt")
+}
+
+model ReviewCard {
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId String   @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  dueAt      DateTime @db.Timestamptz(3)
+  card       Json
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  @@id([userId, questionId])
+  @@index([userId, dueAt, questionId])
+  @@map("review_card")
+}
+
+model PracticeSession {
+  id               String         @id @default(uuid(7)) @db.Uuid
+  userId           String
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mode             PracticeMode
+  currentPosition  Int            @default(1)
+  timeLimitMinutes Int?
+  startedAt        DateTime       @default(now()) @db.Timestamptz(3)
+  completedAt      DateTime?      @db.Timestamptz(3)
+  items            PracticeItem[]
+
+  @@index([userId, completedAt, startedAt, id])
+  @@map("practice_session")
+}
+
+model PracticeItem {
+  id               String           @id @default(uuid(7)) @db.Uuid
+  sessionId        String           @db.Uuid
+  session          PracticeSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  revisionId       String           @db.Uuid
+  revision         QuestionRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  position         Int
+  responseMarkdown String           @default("")
+  revealedAt       DateTime?        @db.Timestamptz(3)
+  rating           Int?
+  reviewedAt       DateTime?        @db.Timestamptz(3)
+
+  @@unique([sessionId, position])
+  @@index([revisionId])
+  @@map("practice_item")
+}
+
 /// Optional per-user settings. A row exists once the user has chosen something.
 model Profile {
   userId      String   @id
@@ -165,6 +259,8 @@ model Question {
   createdAt                  DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt                  DateTime           @updatedAt @db.Timestamptz(3)
   bookmarks                  Bookmark[]
+  collectionItems            CollectionItem[]
+  reviewCards                ReviewCard[]
 
   @@index([authorId, archivedAt, updatedAt, id])
   @@index([currentPublishedRevisionId])
@@ -188,6 +284,7 @@ model QuestionRevision {
   /// When this snapshot became the public version. Publication metadata, not part of the snapshot.
   publishedAt    DateTime?  @db.Timestamptz(3)
   publishedFor   Question[] @relation("PublishedRevision")
+  practiceItems  PracticeItem[]
 
   @@unique([questionId, draftVersion])
   @@unique([questionId, id])

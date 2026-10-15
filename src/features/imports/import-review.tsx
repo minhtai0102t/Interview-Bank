@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
+import Link from "next/link";
+import { useEffect, useId, useRef, useState, useTransition, type ChangeEvent, type MouseEvent } from "react";
+
+import { ActionFeedback } from "@/components/action-feedback";
+import { saveImportedQuestionsAction } from "@/features/questions/actions";
+import { parseQuestionInput, type QuestionInput } from "@/features/questions/input";
+import type { TopicListItem } from "@/features/questions/service";
+import type { ActionRecovery } from "@/lib/action-result";
 
 import { IMPORT_ERROR_MESSAGES, ImportParseError, type ImportErrorCode } from "./errors";
 import { IMPORT_LIMITS } from "./limits";
@@ -59,15 +66,82 @@ type View =
   | { phase: "failed"; code: ImportErrorCode };
 
 const controlClass = "min-h-11 w-full rounded-control border border-line bg-surface px-3 text-sm";
+const SAVE_BATCH_LIMIT = 10;
+const SAVE_BATCH_BYTES = 180_000;
 
-export function ImportReview() {
+type EditableCandidate = {
+  sourceIndex: number;
+  title: string;
+  promptMarkdown: string;
+  answerMarkdown: string;
+  tags: string;
+  selected: boolean;
+};
+
+type SaveState = {
+  kind: "idle" | "success" | "error";
+  message: string;
+  questionIds: string[];
+  recovery?: ActionRecovery;
+};
+
+const difficultyOptions: ReadonlyArray<{ value: QuestionInput["difficulty"]; label: string }> = [
+  { value: "EASY", label: "Easy" },
+  { value: "MEDIUM", label: "Medium" },
+  { value: "HARD", label: "Hard" },
+];
+
+const encoder = new TextEncoder();
+
+function parseTags(value: string): string[] {
+  return value
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function batchInputs(inputs: readonly QuestionInput[]) {
+  const batches: QuestionInput[][] = [];
+  let current: QuestionInput[] = [];
+  let currentBytes = 0;
+
+  for (const input of inputs) {
+    const inputBytes = encoder.encode(JSON.stringify(input)).length;
+    if (current.length > 0 && (current.length >= SAVE_BATCH_LIMIT || currentBytes + inputBytes > SAVE_BATCH_BYTES)) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(input);
+    currentBytes += inputBytes;
+  }
+
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+async function stableRequestId(batch: readonly QuestionInput[], index: number, total: number) {
+  const payload = JSON.stringify({ batch, index, total });
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(payload));
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `import-${hex.slice(0, 24)}-${index + 1}-of-${total}`;
+}
+
+export function ImportReview({ topics, returnTo }: { topics: TopicListItem[]; returnTo: string }) {
   const fileInputId = useId();
   const structureId = useId();
   const hintId = useId();
+  const topicId = useId();
+  const difficultyId = useId();
+  const [savePending, startSaveTransition] = useTransition();
 
   const [structure, setStructure] = useState<StructureMode>("auto");
   const [view, setView] = useState<View>({ phase: "idle" });
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [defaultTopicId, setDefaultTopicId] = useState(topics[0]?.id ?? "");
+  const [defaultDifficulty, setDefaultDifficulty] = useState<QuestionInput["difficulty"]>("MEDIUM");
+  const [editableCandidates, setEditableCandidates] = useState<EditableCandidate[]>([]);
+  const [saveState, setSaveState] = useState<SaveState>({ kind: "idle", message: "", questionIds: [] });
   const file = useRef<File | null>(null);
   const current = useRef<ParseHandle | null>(null);
 
@@ -76,13 +150,25 @@ export function ImportReview() {
   function run(selected: File, mode: StructureMode) {
     current.current?.cancel();
     setExpanded(null);
+    setSaveState({ kind: "idle", message: "", questionIds: [] });
 
     const handle = startParse(selected, mode, (stage) => setView({ phase: "working", stage }));
     current.current = handle;
 
     handle.promise.then(
       (result) => {
-        if (current.current === handle) setView({ phase: "done", result });
+        if (current.current !== handle) return;
+        setEditableCandidates(
+          result.candidates.map((candidate) => ({
+            sourceIndex: candidate.sourceIndex,
+            title: candidate.title,
+            promptMarkdown: candidate.promptMarkdown,
+            answerMarkdown: candidate.answerMarkdown,
+            tags: "",
+            selected: candidate.problems.length === 0,
+          })),
+        );
+        setView({ phase: "done", result });
       },
       (error: unknown) => {
         if (current.current !== handle) return;
@@ -111,6 +197,7 @@ export function ImportReview() {
   }
 
   const working = view.phase === "working";
+  const canSave = topics.length > 0 && view.phase === "done";
 
   return (
     <div className="space-y-6">
@@ -176,21 +263,128 @@ export function ImportReview() {
         )}
       </section>
 
-      {view.phase === "done" && <Review result={view.result} expanded={expanded} onToggle={setExpanded} />}
+      {view.phase === "done" && (
+        <Review
+          result={view.result}
+          topics={topics}
+          defaultTopicId={defaultTopicId}
+          defaultDifficulty={defaultDifficulty}
+          editableCandidates={editableCandidates}
+          saveState={saveState}
+          savePending={savePending}
+          expanded={expanded}
+          onToggle={setExpanded}
+          onDefaultTopicChange={setDefaultTopicId}
+          onDefaultDifficultyChange={setDefaultDifficulty}
+          onCandidateChange={(sourceIndex, patch) => {
+            setEditableCandidates((currentCandidates) =>
+              currentCandidates.map((candidate) =>
+                candidate.sourceIndex === sourceIndex ? { ...candidate, ...patch } : candidate,
+              ),
+            );
+          }}
+          onSave={() => {
+            if (!canSave) return;
+            startSaveTransition(async () => {
+              const selectedInputs: QuestionInput[] = [];
+
+              for (const candidate of editableCandidates) {
+                if (!candidate.selected) continue;
+                try {
+                  selectedInputs.push(
+                    parseQuestionInput({
+                      title: candidate.title,
+                      promptMarkdown: candidate.promptMarkdown,
+                      answerMarkdown: candidate.answerMarkdown,
+                      topicId: defaultTopicId,
+                      difficulty: defaultDifficulty,
+                      tags: parseTags(candidate.tags),
+                    }),
+                  );
+                } catch (error) {
+                  setSaveState({
+                    kind: "error",
+                    message: error instanceof Error ? error.message : "Could not validate the selected drafts.",
+                    questionIds: [],
+                  });
+                  return;
+                }
+              }
+
+              if (selectedInputs.length === 0) {
+                setSaveState({ kind: "error", message: "Select at least one valid question to save.", questionIds: [] });
+                return;
+              }
+
+              const batches = batchInputs(selectedInputs);
+              const questionIds: string[] = [];
+
+              for (const [index, batch] of batches.entries()) {
+                const requestId = await stableRequestId(batch, index, batches.length);
+                const result = await saveImportedQuestionsAction(requestId, batch, returnTo);
+                if (!result.ok) {
+                  setSaveState({
+                    kind: "error",
+                    message: questionIds.length > 0 ? `${result.error} Already-saved drafts stay available below.` : result.error,
+                    questionIds,
+                    recovery: result.recovery,
+                  });
+                  return;
+                }
+                questionIds.push(...result.data.questionIds);
+              }
+
+              setSaveState({
+                kind: "success",
+                message: `Saved ${questionIds.length} draft${questionIds.length === 1 ? "" : "s"}.`,
+                questionIds,
+                recovery: undefined,
+              });
+            });
+          }}
+          topicId={topicId}
+          difficultyId={difficultyId}
+        />
+      )}
     </div>
   );
 }
 
 function Review({
   result,
+  topics,
+  defaultTopicId,
+  defaultDifficulty,
+  editableCandidates,
+  saveState,
+  savePending,
   expanded,
   onToggle,
+  onDefaultTopicChange,
+  onDefaultDifficultyChange,
+  onCandidateChange,
+  onSave,
+  topicId,
+  difficultyId,
 }: {
   result: ParseResult;
+  topics: TopicListItem[];
+  defaultTopicId: string;
+  defaultDifficulty: QuestionInput["difficulty"];
+  editableCandidates: EditableCandidate[];
+  saveState: SaveState;
+  savePending: boolean;
   expanded: number | null;
   onToggle: (sourceIndex: number | null) => void;
+  onDefaultTopicChange: (value: string) => void;
+  onDefaultDifficultyChange: (value: QuestionInput["difficulty"]) => void;
+  onCandidateChange: (sourceIndex: number, patch: Partial<EditableCandidate>) => void;
+  onSave: () => void;
+  topicId: string;
+  difficultyId: string;
 }) {
   const needAttention = result.candidates.filter((candidate) => candidate.problems.length > 0).length;
+  const selectedCount = editableCandidates.filter((candidate) => candidate.selected).length;
 
   return (
     <section aria-labelledby="review-heading" className="rounded-panel border border-line bg-surface">
@@ -210,43 +404,131 @@ function Review({
             ))}
           </ul>
         )}
+
+        <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+          <div>
+            <label htmlFor={topicId} className="block text-sm font-medium">
+              Default topic
+            </label>
+            <select id={topicId} value={defaultTopicId} onChange={(event) => onDefaultTopicChange(event.target.value)} className={`${controlClass} mt-1`}>
+              {topics.map((topic) => (
+                <option key={topic.id} value={topic.id}>
+                  {topic.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor={difficultyId} className="block text-sm font-medium">
+              Default difficulty
+            </label>
+            <select
+              id={difficultyId}
+              value={defaultDifficulty}
+              onChange={(event) => onDefaultDifficultyChange(event.target.value as QuestionInput["difficulty"])}
+              className={`${controlClass} mt-1`}
+            >
+              {difficultyOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={selectedCount === 0 || savePending || topics.length === 0}
+            className="inline-flex min-h-11 items-center justify-center rounded-control bg-primary px-4 text-sm font-medium text-white disabled:opacity-60"
+          >
+            {savePending ? "Saving…" : "Save selected drafts"}
+          </button>
+        </div>
+
+        {saveState.kind !== "idle" ? (
+          <div className="mt-4 space-y-2">
+            <ActionFeedback
+              feedback={{ kind: saveState.kind, message: saveState.message, recovery: saveState.recovery }}
+              className="text-sm"
+            />
+            {saveState.questionIds.length > 0 ? (
+              <ol className="flex flex-wrap gap-2 text-sm">
+                {saveState.questionIds.map((questionId, index) => (
+                  <li key={questionId}>
+                    <Link href={`/my-questions/${questionId}/edit`} className="text-primary underline-offset-2 hover:underline">
+                      Open saved draft {index + 1}
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {result.candidates.length > 0 && (
         <ol aria-label="Detected questions" className="divide-y divide-line">
-          {result.candidates.map((candidate) => (
+          {result.candidates.map((candidate) => {
+            const editable = editableCandidates.find((item) => item.sourceIndex === candidate.sourceIndex);
+            if (!editable) return null;
+            return (
             <CandidateRow
               key={candidate.sourceIndex}
               candidate={candidate}
+              editable={editable}
               open={expanded === candidate.sourceIndex}
               onToggle={() => onToggle(expanded === candidate.sourceIndex ? null : candidate.sourceIndex)}
+              onChange={(patch) => onCandidateChange(candidate.sourceIndex, patch)}
             />
-          ))}
+            );
+          })}
         </ol>
       )}
     </section>
   );
 }
 
-function CandidateRow({ candidate, open, onToggle }: { candidate: ImportCandidate; open: boolean; onToggle: () => void }) {
+function CandidateRow({
+  candidate,
+  editable,
+  open,
+  onToggle,
+  onChange,
+}: {
+  candidate: ImportCandidate;
+  editable: EditableCandidate;
+  open: boolean;
+  onToggle: () => void;
+  onChange: (patch: Partial<EditableCandidate>) => void;
+}) {
   const panelId = useId();
 
   return (
     <li>
       <h3>
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={open ? panelId : undefined}
-          onClick={onToggle}
-          className="flex min-h-11 w-full items-start gap-3 px-4 py-3 text-left hover:bg-canvas sm:px-6"
-        >
-          <span className="w-10 shrink-0 text-sm text-muted tabular-nums">{candidate.sourceIndex + 1}</span>
-          <span className="min-w-0 flex-1 break-words font-medium">{candidate.title || "Untitled"}</span>
-          {candidate.problems.length > 0 && (
-            <span className="shrink-0 rounded-control bg-due-soft px-2 py-0.5 text-xs font-medium text-due-ink">Needs attention</span>
-          )}
-        </button>
+        <div className="flex min-h-11 items-start gap-3 px-4 py-3 sm:px-6">
+          <label className="mt-1 inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label={`Select question ${candidate.sourceIndex + 1}`}
+              checked={editable.selected}
+              onChange={(event) => onChange({ selected: event.target.checked })}
+            />
+          </label>
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={open ? panelId : undefined}
+            onClick={onToggle}
+            className="flex min-h-11 min-w-0 flex-1 items-start gap-3 text-left hover:text-primary"
+          >
+            <span className="w-10 shrink-0 text-sm text-muted tabular-nums">{candidate.sourceIndex + 1}</span>
+            <span className="min-w-0 flex-1 break-words font-medium">{editable.title || "Untitled"}</span>
+            {candidate.problems.length > 0 && (
+              <span className="shrink-0 rounded-control bg-due-soft px-2 py-0.5 text-xs font-medium text-due-ink">Needs attention</span>
+            )}
+          </button>
+        </div>
       </h3>
 
       {open && (
@@ -258,22 +540,47 @@ function CandidateRow({ candidate, open, onToggle }: { candidate: ImportCandidat
               ))}
             </ul>
           )}
-          <SourceText label="Question" text={candidate.promptMarkdown} />
-          <SourceText label="Answer" text={candidate.answerMarkdown} />
+          <div>
+            <label htmlFor={`title-${candidate.sourceIndex}`} className="block text-sm font-medium">
+              Title
+            </label>
+            <input
+              id={`title-${candidate.sourceIndex}`}
+              value={editable.title}
+              onChange={(event) => onChange({ title: event.target.value })}
+              className={`${controlClass} mt-1`}
+            />
+          </div>
+          <SourceField label="Question" value={editable.promptMarkdown} onChange={(value) => onChange({ promptMarkdown: value })} />
+          <SourceField label="Answer" value={editable.answerMarkdown} onChange={(value) => onChange({ answerMarkdown: value })} />
+          <div>
+            <label htmlFor={`tags-${candidate.sourceIndex}`} className="block text-sm font-medium">
+              Tags
+            </label>
+            <input
+              id={`tags-${candidate.sourceIndex}`}
+              value={editable.tags}
+              onChange={(event) => onChange({ tags: event.target.value })}
+              placeholder="optional, comma-separated"
+              className={`${controlClass} mt-1`}
+            />
+          </div>
         </div>
       )}
     </li>
   );
 }
 
-/** Shows Markdown source as plain text; imported content is never rendered as HTML here. */
-function SourceText({ label, text }: { label: string; text: string }) {
+function SourceField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <div>
-      <p className="text-sm font-medium">{label}</p>
-      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-control border border-line bg-canvas p-3 font-mono text-sm">
-        {text || "(empty)"}
-      </pre>
+      <label className="block text-sm font-medium">{label}</label>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        rows={6}
+        className="mt-1 w-full rounded-control border border-line bg-canvas p-3 font-mono text-sm"
+      />
     </div>
   );
 }

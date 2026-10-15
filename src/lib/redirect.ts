@@ -18,3 +18,7 @@ export function safeRedirectPath(value: unknown, fallback = "/"): string {
 
   return `${url.pathname}${url.search}${url.hash}`;
 }
+
+export function signInHref(returnTo: unknown): string {
+  return `${SIGN_IN_PATH}?next=${encodeURIComponent(safeRedirectPath(returnTo))}`;
+}
